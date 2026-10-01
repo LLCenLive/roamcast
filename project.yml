@@ -8,12 +8,13 @@ options:
 packages:
   HaishinKit:
     url: https://github.com/HaishinKit/HaishinKit.swift
-    # Épingler une version exacte après la Phase 1, puis réaligner LivePublisher.swift.
-    from: 2.0.0
+    # Version épinglée : HaishinKitPublisher.swift est écrit pour l'API exacte de la 2.2.5
+    # (qui exige Xcode 26).
+    exactVersion: 2.2.5
 
 settings:
   base:
-    SWIFT_VERSION: "5.10"
+    SWIFT_VERSION: "5.0"         # mode Swift 5 (concurrence stricte non imposée)
     # Pas de compte Apple payant : on compile SANS signature (CI),
     # la signature est faite ensuite par AltStore avec l'identifiant Apple gratuit.
     CODE_SIGNING_ALLOWED: NO
@@ -32,6 +33,9 @@ targets:
     sources: [Roamcast]
     dependencies:
       - package: HaishinKit
+        product: HaishinKit
+      - package: HaishinKit
+        product: RTMPHaishinKit
       # DJI SDK V4 + DJIWidget : via CocoaPods (voir Podfile), pas SPM.
     info:
       path: Roamcast/Info.plist

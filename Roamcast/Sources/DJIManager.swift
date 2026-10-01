@@ -2,8 +2,12 @@ import Combine
 import CoreLocation
 import CoreVideo
 import UIKit
+#if canImport(DJISDK)
+import DJISDK
+import DJIWidget
+#endif
 
-/// Télémétrie drone. `aircraftLocation` reste PRIVÉE (interface opérateur uniquement).
+/// Télémétrie drone. La position de l'appareil reste PRIVÉE (interface opérateur uniquement).
 struct DroneTelemetry: Equatable {
     var altitudeMeters: Double = 0          // relative au décollage
     var horizontalSpeed: Double = 0         // m/s
@@ -13,7 +17,9 @@ struct DroneTelemetry: Equatable {
     var gpsSignalLevel: Int = 0             // 0…5 côté DJI
     var flightTime: TimeInterval = 0
     var isFlying = false
-    var aircraftLocation: CLLocationCoordinate2D?
+    /// (CLLocationCoordinate2D n'est pas Equatable : on stocke les deux composantes.)
+    var aircraftLatitude: Double?
+    var aircraftLongitude: Double?
 }
 
 /// Étapes de l'écran de préparation drone (CDC §8, étapes 12 → 15).
@@ -50,9 +56,6 @@ protocol DroneLink: VideoSource {
 // MARK: - Implémentation DJI Mobile SDK V4
 
 #if canImport(DJISDK)
-import DJISDK
-import DJIWidget
-
 /// Gestion du DJI Mini 2 via MSDK iOS V4 (support Mini 2 ajouté en 4.16).
 /// ⚠️ Phase 0 du CDC : tout ce fichier est à valider sur le matériel réel avant le reste.
 /// Aucune commande de vol n'est envoyée : lecture seule (CDC §17).
@@ -179,7 +182,8 @@ final class DJIManager: NSObject, DroneLink, DJISDKManagerDelegate, DJIVideoFeed
         t.isFlying = state.isFlying
         t.flightTime = TimeInterval(state.flightTimeInSeconds)
         if let a = state.aircraftLocation {
-            t.aircraftLocation = a.coordinate
+            t.aircraftLatitude = a.coordinate.latitude
+            t.aircraftLongitude = a.coordinate.longitude
             if let h = state.homeLocation { t.distanceToHomeMeters = a.distance(from: h) }
         }
         telemetry.send(t)
@@ -242,7 +246,9 @@ final class SimulatedDrone: NSObject, DroneLink {
     private func frame() {
         t += 1.0 / 30
         let size = CGSize(width: 1280, height: 720)
-        let image = UIGraphicsImageRenderer(size: size).image { ctx in
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1   // sinon ×3 (écran Retina) : 3840×2160 à 30 i/s
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { ctx in
             let hue = CGFloat((t / 20).truncatingRemainder(dividingBy: 1))
             UIColor(hue: hue, saturation: 0.5, brightness: 0.6, alpha: 1).setFill()
             ctx.fill(CGRect(origin: .zero, size: size))

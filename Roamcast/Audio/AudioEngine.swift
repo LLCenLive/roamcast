@@ -1,6 +1,5 @@
 import AVFoundation
 import Combine
-import CoreMedia
 
 /// Mix audio (CDC §7) :
 ///
@@ -28,8 +27,8 @@ final class AudioEngine: ObservableObject {
 
     private var ducker: Ducker
     private let duckLock = NSLock()
-    /// Reçoit l'audio final à encoder.
-    var onBroadcastBuffer: ((CMSampleBuffer) -> Void)?
+    /// Reçoit l'audio final à encoder (PCM + instant sur l'horloge hôte, la même que la vidéo).
+    var onBroadcastBuffer: ((AVAudioPCMBuffer, AVAudioTime) -> Void)?
 
     init(ducking: DuckingSettings) {
         ducker = Ducker(settings: ducking)
@@ -79,7 +78,14 @@ final class AudioEngine: ObservableObject {
 
     // MARK: - Graphe
 
+    private var graphBuilt = false
+
     func start() throws {
+        if graphBuilt {
+            if !engine.isRunning { try engine.start() }
+            return
+        }
+        graphBuilt = true
         [voiceMixer, musicMixer, broadcastMixer, musicPlayer].forEach { engine.attach($0) }
 
         let inputFormat = engine.inputNode.outputFormat(forBus: 0)
@@ -102,8 +108,9 @@ final class AudioEngine: ObservableObject {
         }
         // 2) Sortie broadcast → encodeur
         broadcastMixer.installTap(onBus: 0, bufferSize: 1024, format: mixFormat) { [weak self] buffer, when in
-            guard let self, let sb = Self.sampleBuffer(from: buffer, at: when) else { return }
-            self.onBroadcastBuffer?(sb)
+            // Même horloge que la vidéo (host time) → synchro lèvres correcte.
+            let time = when.isHostTimeValid ? when : AVAudioTime(hostTime: mach_absolute_time())
+            self?.onBroadcastBuffer?(buffer, time)
         }
 
         engine.prepare()
@@ -140,40 +147,5 @@ final class AudioEngine: ObservableObject {
               AVAudioSession.InterruptionType(rawValue: raw) == .ended else { return }
         try? AVAudioSession.sharedInstance().setActive(true)
         try? engine.start()
-    }
-
-    // MARK: - Conversion PCM → CMSampleBuffer
-
-    static func sampleBuffer(from buffer: AVAudioPCMBuffer, at time: AVAudioTime) -> CMSampleBuffer? {
-        var format: CMAudioFormatDescription?
-        guard CMAudioFormatDescriptionCreate(allocator: kCFAllocatorDefault,
-                                             asbd: buffer.format.streamDescription,
-                                             layoutSize: 0, layout: nil,
-                                             magicCookieSize: 0, magicCookie: nil,
-                                             extensions: nil,
-                                             formatDescriptionOut: &format) == noErr,
-              let format else { return nil }
-
-        let sampleRate = CMTimeScale(buffer.format.sampleRate)
-        // Même horloge que la vidéo (host time) → synchro lèvres correcte.
-        let pts = time.isHostTimeValid
-            ? CMClockMakeHostTimeFromSystemUnits(time.hostTime)
-            : CMClockGetTime(CMClockGetHostTimeClock())
-        var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: sampleRate),
-                                        presentationTimeStamp: pts, decodeTimeStamp: .invalid)
-        var sb: CMSampleBuffer?
-        guard CMSampleBufferCreate(allocator: kCFAllocatorDefault, dataBuffer: nil, dataReady: false,
-                                   makeDataReadyCallback: nil, refcon: nil,
-                                   formatDescription: format,
-                                   sampleCount: CMItemCount(buffer.frameLength),
-                                   sampleTimingEntryCount: 1, sampleTimingArray: &timing,
-                                   sampleSizeEntryCount: 0, sampleSizeArray: nil,
-                                   sampleBufferOut: &sb) == noErr, let sb else { return nil }
-        guard CMSampleBufferSetDataBufferFromAudioBufferList(sb, blockBufferAllocator: kCFAllocatorDefault,
-                                                             blockBufferMemoryAllocator: kCFAllocatorDefault,
-                                                             flags: 0,
-                                                             bufferList: buffer.audioBufferList) == noErr
-        else { return nil }
-        return sb
     }
 }

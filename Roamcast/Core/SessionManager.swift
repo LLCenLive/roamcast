@@ -41,7 +41,7 @@ final class SessionManager: ObservableObject {
     init(twitchClientID: String) {
         let initial = LivePreset.defaults[0]
         preset = initial
-        #if canImport(HaishinKit)
+        #if canImport(RTMPHaishinKit)
         let publisher = SwitchablePublisher(real: HaishinKitPublisher())
         #else
         let publisher = SwitchablePublisher(real: nil)
@@ -63,7 +63,7 @@ final class SessionManager: ObservableObject {
         AppLog.log("App", AppInfo.summary)
         engine.register(camera)
         engine.register(drone)
-        audio.onBroadcastBuffer = { [publisher] sb in publisher.appendAudio(sb) }
+        audio.onBroadcastBuffer = { [publisher] buffer, when in publisher.appendAudio(buffer, when: when) }
 
         drone.checklistPublisher.receive(on: RunLoop.main)
             .sink { [weak self] c in self?.droneChecklist = c; self?.watchDroneLink(c) }

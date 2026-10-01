@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreMedia
 import Foundation
 
@@ -22,8 +23,10 @@ protocol LivePublisher: AnyObject {
     var onStateChange: ((PublisherState) -> Void)? { get set }
     func configure(width: Int, height: Int, fps: Int, bitrate: Int) async
     func connect(url: String, streamKey: String) async throws
+    /// Image NON compressée (BGRA) : l'éditeur encode lui-même en H.264.
     func appendVideo(_ sampleBuffer: CMSampleBuffer)
-    func appendAudio(_ sampleBuffer: CMSampleBuffer)
+    /// PCM non compressé, horodaté sur l'horloge hôte.
+    func appendAudio(_ buffer: AVAudioPCMBuffer, when: AVAudioTime)
     func setVideoBitrate(_ bitsPerSecond: Int) async
     func stats() async -> PublisherStats
     func disconnect() async
@@ -49,92 +52,8 @@ enum SampleBufferFactory {
     }
 }
 
-#if canImport(HaishinKit)
-import HaishinKit
-import VideoToolbox
-#if canImport(RTMPHaishinKit)
-import RTMPHaishinKit
-#endif
-
-/// Adaptateur HaishinKit 2.x.
-/// ⚠️ SEUL fichier à réaligner si l'API HaishinKit de la version épinglée diffère
-/// (l'API a beaucoup bougé entre 1.x et 2.x : acteurs, async, découpage en modules).
-final class HaishinKitPublisher: LivePublisher {
-    var onStateChange: ((PublisherState) -> Void)?
-
-    private let connection = RTMPConnection()
-    private lazy var stream = RTMPStream(connection: connection)
-    private var lastBytesOut: Int64 = 0
-    private var lastSample = Date()
-
-    func configure(width: Int, height: Int, fps: Int, bitrate: Int) async {
-        var video = await stream.videoSettings
-        video.videoSize = CGSize(width: width, height: height)
-        video.bitRate = bitrate
-        video.maxKeyFrameIntervalDuration = 2          // Twitch : keyframe toutes les 2 s
-        video.profileLevel = kVTProfileLevel_H264_High_AutoLevel as String
-        try? await stream.setVideoSettings(video)
-
-        var audio = await stream.audioSettings
-        audio.bitRate = 160_000                        // AAC 160 kb/s
-        try? await stream.setAudioSettings(audio)
-        try? await stream.setFrameRate(Float64(fps))
-    }
-
-    func connect(url: String, streamKey: String) async throws {
-        onStateChange?(.connecting)
-        _ = try await connection.connect(url)
-        _ = try await stream.publish(streamKey)
-        onStateChange?(.live)
-        Task { [weak self] in await self?.observeStatus() }
-    }
-
-    func appendVideo(_ sampleBuffer: CMSampleBuffer) {
-        Task { await stream.append(sampleBuffer) }
-    }
-
-    func appendAudio(_ sampleBuffer: CMSampleBuffer) {
-        Task { await stream.append(sampleBuffer) }
-    }
-
-    func setVideoBitrate(_ bitsPerSecond: Int) async {
-        var video = await stream.videoSettings
-        video.bitRate = bitsPerSecond
-        try? await stream.setVideoSettings(video)
-    }
-
-    func stats() async -> PublisherStats {
-        // À vérifier selon la version : les compteurs d'octets sont exposés par RTMPConnection.
-        let total = await connection.totalBytesOut
-        let now = Date()
-        let dt = max(0.001, now.timeIntervalSince(lastSample))
-        let bps = Int(Double(total - lastBytesOut) * 8 / dt)
-        lastBytesOut = total
-        lastSample = now
-        return PublisherStats(sentBitsPerSecond: bps, queuedBytes: 0, insufficientBandwidth: false)
-    }
-
-    func disconnect() async {
-        _ = try? await stream.close()
-        try? await connection.close()
-        onStateChange?(.closed)
-    }
-
-    private func observeStatus() async {
-        for await status in await connection.status {
-            switch status.code {
-            case RTMPConnection.Code.connectClosed.rawValue,
-                 RTMPConnection.Code.connectFailed.rawValue:
-                onStateChange?(.failed(status.code))
-            default: break
-            }
-        }
-    }
-}
-#endif
-
 /// Éditeur factice : permet de développer l'UI, la bascule de sources et l'audio
-/// sans réseau ni Twitch (simulateur, avion…).
+/// sans réseau ni Twitch.
 final class DryRunPublisher: LivePublisher {
     var onStateChange: ((PublisherState) -> Void)?
     private var bitrate = 0
@@ -144,7 +63,7 @@ final class DryRunPublisher: LivePublisher {
     func configure(width: Int, height: Int, fps: Int, bitrate: Int) async { self.bitrate = bitrate }
     func connect(url: String, streamKey: String) async throws { onStateChange?(.live) }
     func appendVideo(_ sampleBuffer: CMSampleBuffer) { videoFrames += 1 }
-    func appendAudio(_ sampleBuffer: CMSampleBuffer) { audioBuffers += 1 }
+    func appendAudio(_ buffer: AVAudioPCMBuffer, when: AVAudioTime) { audioBuffers += 1 }
     func setVideoBitrate(_ bitsPerSecond: Int) async { bitrate = bitsPerSecond }
     func stats() async -> PublisherStats { PublisherStats(sentBitsPerSecond: bitrate) }
     func disconnect() async { onStateChange?(.closed) }
@@ -168,7 +87,7 @@ final class SwitchablePublisher: LivePublisher {
     }
     func connect(url: String, streamKey: String) async throws { try await active.connect(url: url, streamKey: streamKey) }
     func appendVideo(_ sampleBuffer: CMSampleBuffer) { active.appendVideo(sampleBuffer) }
-    func appendAudio(_ sampleBuffer: CMSampleBuffer) { active.appendAudio(sampleBuffer) }
+    func appendAudio(_ buffer: AVAudioPCMBuffer, when: AVAudioTime) { active.appendAudio(buffer, when: when) }
     func setVideoBitrate(_ bitsPerSecond: Int) async { await active.setVideoBitrate(bitsPerSecond) }
     func stats() async -> PublisherStats { await active.stats() }
     func disconnect() async { await active.disconnect() }

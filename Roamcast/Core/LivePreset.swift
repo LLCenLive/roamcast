@@ -105,10 +105,10 @@ enum TwitchTagRules {
 
 final class PresetStore: ObservableObject {
     @Published var presets: [LivePreset] { didSet { save() } }
-    private let key = "roamcast.presets.v1"
+    private static let key = "roamcast.presets.v1"
 
     init() {
-        if let data = UserDefaults.standard.data(forKey: key),
+        if let data = UserDefaults.standard.data(forKey: Self.key),
            let decoded = try? JSONDecoder().decode([LivePreset].self, from: data), !decoded.isEmpty {
             presets = decoded
         } else {
@@ -122,6 +122,6 @@ final class PresetStore: ObservableObject {
     }
 
     private func save() {
-        if let data = try? JSONEncoder().encode(presets) { UserDefaults.standard.set(data, forKey: key) }
+        if let data = try? JSONEncoder().encode(presets) { UserDefaults.standard.set(data, forKey: Self.key) }
     }
 }

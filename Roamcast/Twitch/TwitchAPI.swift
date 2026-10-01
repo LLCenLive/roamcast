@@ -83,9 +83,8 @@ final class TwitchAPI {
     }
 
     private func get<T: Decodable>(_ path: String, _ query: [String: String] = [:]) async throws -> [T] {
-        struct Envelope<U: Decodable>: Decodable { let data: [U] }
         let data = try await request("GET", path, query, body: nil)
-        return try JSONDecoder().decode(Envelope<T>.self, from: data).data
+        return try JSONDecoder().decode(HelixEnvelope<T>.self, from: data).data
     }
 
     private func request(_ method: String, _ path: String, _ query: [String: String], body: Data?) async throws -> Data {
@@ -107,3 +106,6 @@ final class TwitchAPI {
         return data
     }
 }
+
+/// Toutes les réponses Helix ont la forme `{ "data": [...] }`.
+private struct HelixEnvelope<T: Decodable>: Decodable { let data: [T] }

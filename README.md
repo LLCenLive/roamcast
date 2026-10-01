@@ -134,7 +134,7 @@ Seul `SessionManager.stop()` (après confirmation) peut fermer le RTMP. C'est v�
 
 Le code a été écrit sans Xcode. La logique pure (états, ducking, bitrate, grille GPS) et le script de source AltStore ont été vérifiés. En revanche, **rien n'a encore été compilé** : le premier build GitHub sera le vrai juge, et il faut s'attendre à une ou deux passes de corrections. Les endroits les plus exposés :
 
-1. **`Streaming/LivePublisher.swift` – adaptateur HaishinKit.** L'API a beaucoup changé entre 1.x et 2.x (acteurs, `async`, modules séparés). C'est le seul fichier à réaligner une fois la version épinglée.
+1. **`Streaming/HaishinKitPublisher.swift` – adaptateur HaishinKit.** Écrit pour l'API exacte de HaishinKit **2.2.5** (épinglée), qui exige **Xcode 26** : la CI tourne donc sur `macos-26`.
 2. **`Sources/DJIManager.swift` – SDK DJI V4.16 + DJIWidget.** Le schéma « `DJIVideoPreviewer` en décodage matériel → `cv_pixelbuffer_fastupload` » est celui des exemples DJI ; son comportement exact avec le Mini 2 est l'objet de la Phase 0.
 3. **`.bluetoothHighQualityRecording`** (iOS 26) : option récente, à confirmer avec le DJI Mic Mini.
 

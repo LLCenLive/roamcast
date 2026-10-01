@@ -71,6 +71,14 @@ final class VideoPipeline: @unchecked Sendable {
 
         // Aperçu opérateur : on montre exactement ce que voient les viewers, à 15 i/s pour épargner le GPU.
         if frameIndex % 2 == 0 {
+            // Pas d'horloge de lecture sur le calque : afficher chaque image dès réception.
+            if let attachments = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: true),
+               CFArrayGetCount(attachments) > 0 {
+                let dict = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
+                CFDictionarySetValue(dict,
+                                     Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+                                     Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
+            }
             DispatchQueue.main.async { [preview] in
                 if preview.status == .failed { preview.flush() }
                 preview.enqueue(sb)

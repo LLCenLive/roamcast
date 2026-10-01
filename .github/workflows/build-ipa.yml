@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26   # Xcode 26 obligatoire pour HaishinKit 2.2
     timeout-minutes: 60
     env:
       MARKETING_VERSION: "0.1.${{ github.run_number }}"
@@ -38,6 +38,9 @@ jobs:
 
       - name: Outils (XcodeGen, CocoaPods)
         run: |
+          # Toujours le Xcode 26 stable le plus récent de l'image
+          XC=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -vi beta | sort -V | tail -1)
+          [ -n "$XC" ] && sudo xcode-select -s "$XC"
           brew install xcodegen
           gem list cocoapods -i || sudo gem install cocoapods
           xcodebuild -version | tee -a "$GITHUB_STEP_SUMMARY"
