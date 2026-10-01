@@ -3,12 +3,16 @@ name: Build IPA
 # Compile Roamcast sur un Mac GitHub (gratuit et illimité pour un dépôt public),
 # publie une IPA NON signée en Release, puis met à jour la source AltStore.
 # La signature se fait ensuite sur l'iPhone via AltStore (identifiant Apple gratuit).
+#
+# En cas d'échec, les erreurs sont publiées dans le RÉSUMÉ du build (page publique,
+# lisible sans connexion) : il suffit de donner le lien du build à Claude.
 
 on:
   push:
     branches: [main]
     paths:
       - "Roamcast/**"
+      - "RoamcastTests/**"
       - "project.yml"
       - "Podfile"
       - ".github/workflows/build-ipa.yml"
@@ -25,33 +29,35 @@ concurrency:
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       MARKETING_VERSION: "0.1.${{ github.run_number }}"
       BUILD_NUMBER: "${{ github.run_number }}"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Outils (XcodeGen, CocoaPods)
         run: |
           brew install xcodegen
           gem list cocoapods -i || sudo gem install cocoapods
-          xcodebuild -version
+          xcodebuild -version | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Génération du projet
-        run: xcodegen generate
+        run: |
+          xcodegen generate
+          xcodebuild -list -project Roamcast.xcodeproj
 
       - name: Dépendances (SDK DJI via CocoaPods)
         run: pod install --repo-update
 
       - name: Compilation (sans signature)
+        id: compile
         run: |
-          set -o pipefail
+          set +e
           xcodebuild \
             -workspace Roamcast.xcworkspace \
             -scheme Roamcast \
             -configuration Release \
-            -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
@@ -59,19 +65,54 @@ jobs:
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
             DJI_APP_KEY="${{ secrets.DJI_APP_KEY }}" \
             TWITCH_CLIENT_ID="${{ secrets.TWITCH_CLIENT_ID }}" \
-            build | tee build.log | grep -E "error:|warning: .*deprecated|BUILD (SUCCEEDED|FAILED)" || true
-          test -d build/Build/Products/Release-iphoneos/Roamcast.app
+            build > build.log 2>&1
+          status=$?
+          set -e
+          tail -5 build.log
+          APP=build/Build/Products/Release-iphoneos/Roamcast.app
+          if [ $status -ne 0 ] || [ ! -f "$APP/Info.plist" ] || [ ! -f "$APP/Roamcast" ]; then
+            echo "xcodebuild a échoué (code $status)"
+            exit 1
+          fi
 
-      - name: Erreurs de compilation (à copier-coller à Claude)
+      - name: Publication des erreurs (résumé public du build)
         if: failure()
-        run: grep -E "error:" build.log | head -60 || true
+        run: |
+          [ -f build.log ] || { echo "Échec avant la compilation : voir l'étape en rouge." >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          # Annotations (affichées en haut de la page du build, max ~10)
+          # (le shell GitHub tourne en pipefail : « || true » évite qu'un grep vide fasse échouer l'étape)
+          { grep -E "error:|fatal error" build.log || true; } | sort -u | head -10 | while IFS= read -r l; do
+            echo "::error::$l"
+          done
+          {
+            echo "## ❌ Erreurs de compilation"
+            echo '```'
+            { grep -E "error:|fatal error" build.log || true; } | sort -u | head -80
+            echo '```'
+            echo "## Fin du log"
+            echo '```'
+            tail -60 build.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Création de l'IPA
         run: |
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/Roamcast.app Payload/
           zip -qry Roamcast.ipa Payload
-          ls -lh Roamcast.ipa
+          SIZE=$(stat -f%z Roamcast.ipa)
+          echo "IPA : $SIZE octets"
+          # Garde-fou : une vraie IPA avec le SDK DJI pèse des dizaines de Mo.
+          [ "$SIZE" -gt 1000000 ] || { echo "::error::IPA suspecte ($SIZE octets)"; exit 1; }
+          echo "✅ IPA : $(( SIZE / 1048576 )) Mo" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Release GitHub
         env:
@@ -93,10 +134,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add altstore/source.json
           git commit -m "AltStore : Roamcast $MARKETING_VERSION [skip ci]"
+          git pull --rebase origin main
           git push
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Roamcast-${{ env.MARKETING_VERSION }}
-          path: Roamcast.ipa
-          retention-days: 14
