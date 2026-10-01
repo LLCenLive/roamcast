@@ -1,0 +1,102 @@
+name: Build IPA
+
+# Compile Roamcast sur un Mac GitHub (gratuit et illimité pour un dépôt public),
+# publie une IPA NON signée en Release, puis met à jour la source AltStore.
+# La signature se fait ensuite sur l'iPhone via AltStore (identifiant Apple gratuit).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Roamcast/**"
+      - "project.yml"
+      - "Podfile"
+      - ".github/workflows/build-ipa.yml"
+      - "scripts/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # créer la Release + committer la source AltStore
+
+concurrency:
+  group: build-ipa
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      MARKETING_VERSION: "0.1.${{ github.run_number }}"
+      BUILD_NUMBER: "${{ github.run_number }}"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Outils (XcodeGen, CocoaPods)
+        run: |
+          brew install xcodegen
+          gem list cocoapods -i || sudo gem install cocoapods
+          xcodebuild -version
+
+      - name: Génération du projet
+        run: xcodegen generate
+
+      - name: Dépendances (SDK DJI via CocoaPods)
+        run: pod install --repo-update
+
+      - name: Compilation (sans signature)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -workspace Roamcast.xcworkspace \
+            -scheme Roamcast \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            MARKETING_VERSION="$MARKETING_VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            DJI_APP_KEY="${{ secrets.DJI_APP_KEY }}" \
+            TWITCH_CLIENT_ID="${{ secrets.TWITCH_CLIENT_ID }}" \
+            build | tee build.log | grep -E "error:|warning: .*deprecated|BUILD (SUCCEEDED|FAILED)" || true
+          test -d build/Build/Products/Release-iphoneos/Roamcast.app
+
+      - name: Erreurs de compilation (à copier-coller à Claude)
+        if: failure()
+        run: grep -E "error:" build.log | head -60 || true
+
+      - name: Création de l'IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/Roamcast.app Payload/
+          zip -qry Roamcast.ipa Payload
+          ls -lh Roamcast.ipa
+
+      - name: Release GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v$MARKETING_VERSION" Roamcast.ipa \
+            --title "Roamcast $MARKETING_VERSION" \
+            --notes "Build automatique depuis ${GITHUB_SHA::7}. Installer via AltStore."
+
+      - name: Mise à jour de la source AltStore
+        run: |
+          python3 scripts/update_altstore_source.py \
+            --ipa Roamcast.ipa \
+            --repo "$GITHUB_REPOSITORY" \
+            --version "$MARKETING_VERSION" \
+            --build "$BUILD_NUMBER" \
+            --notes "$(git log -1 --pretty=%s)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add altstore/source.json
+          git commit -m "AltStore : Roamcast $MARKETING_VERSION [skip ci]"
+          git push
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Roamcast-${{ env.MARKETING_VERSION }}
+          path: Roamcast.ipa
+          retention-days: 14

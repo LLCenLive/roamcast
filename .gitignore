@@ -1,0 +1,9 @@
+# Généré par XcodeGen / CocoaPods / la CI
+*.xcodeproj
+*.xcworkspace
+Pods/
+Podfile.lock
+build/
+Payload/
+*.ipa
+.DS_Store
